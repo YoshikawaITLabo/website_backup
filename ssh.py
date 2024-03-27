@@ -23,7 +23,7 @@ def dbconnect():
     return conn
 
 def main():
-# MySQLに接続
+    # MySQLに接続
     # カーソルを取得
     conn = dbconnect()
     cursor = conn.cursor()
