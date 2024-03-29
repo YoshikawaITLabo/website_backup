@@ -35,7 +35,7 @@ def main():
     cursor.close()
     conn.close()
 
-    #取得するホストの情報をデータベースから取得    sql = "SELECT"
+    #取得するホストの情報をデータベースから取得
     sql = "SELECT"
     sql += " `hostname`"
     sql += ",`port`"
