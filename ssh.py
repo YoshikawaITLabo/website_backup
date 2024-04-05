@@ -22,19 +22,30 @@ def dbconnect():
     )
     return conn
 
-def main():
-    # MySQLに接続
-    # カーソルを取得
+def select_state(sql,params):
+    #SELECT文の戻り値があるSQLの実行。パラメータ付きも可
     conn = dbconnect()
     cursor = conn.cursor()
+    cursor.execute(sql, params)
+    result=cursor.fetchall()
+    conn.close()
+    
+    return result
 
-    # 一時テーブルを空にする
-    sql = "DELETE FROM `templist`;"
-    cursor.execute(sql)
+def non_select_state(sql,params):
+    #INSERT DELETE UPDATEなど値が戻らないSQLの実行。パラメータ付きも可
+    conn = dbconnect()
+    cursor = conn.cursor()
+    cursor.execute(sql,params)
     conn.commit()
-    cursor.close()
     conn.close()
 
+def main():
+    # 一時テーブルを空にする
+    params=[]
+    sql = "DELETE FROM `templist`;"
+    non_select_state(sql,params)
+    
     #取得するホストの情報をデータベースから取得
     sql = "SELECT"
     sql += " `hostname`"
@@ -42,16 +53,15 @@ def main():
     sql += ",`user`"
     sql += ",`passphrase`"
     sql += ",`keysfolder`"
-    sql += ",`keysfile`"
-    sql += ",`sourcefolder`"
-    sql += ",`destinationfolder`"
+    sql += ",`keyfile`"
+    sql += ",`copy_source`"
+    sql += ",`Copy_to`"
+    sql += ",`Storage`"
     sql += " FROM"
-    sql += "`hostlist`;"
+    sql += " `hostlist`;"
 
-    con2 = dbconnect()
-    cursor2 = con2.cursor()
-    cursor2.execute(sql)
-    result=cursor2.fetchall()
+    params=[]
+    result = select_state(sql,params)
 
     for item in result:
         HOSTNAME = item[0]
@@ -61,9 +71,7 @@ def main():
         PRIVATE_KEY_PATH = item[4] + item[5]
         BKDIR = item[6]
         WRDIR = item[7]
-
-    cursor2.close()
-    con2.close()
+        #後でNAS情報を追加
 
     #取得したホストに接続する
     client = paramiko.SSHClient()
@@ -78,13 +86,13 @@ def main():
     sftp_connection = client.open_sftp()
     sftp_connection.chdir(BKDIR)
 
-    #登録用DB
-    con3 = dbconnect()
-
-    # ファイルリストを取得。DBの一時ファイルに保管
+     # ファイルリストを取得。DBの一時ファイルに保管
     files = sftp_connection.listdir_attr()
     for rfile in files:
         if rfile.st_size > 0:
+
+            params = [rfile.filename, rfile.st_size, datetime.datetime.fromtimestamp(rfile.st_mtime)]
+            placeholders = ', '.join(['%s'] * len(params))
 
             sql = "INSERT INTO `templist`"
             sql += "("
@@ -92,27 +100,18 @@ def main():
             sql += ",`FileSize`"
             sql += ",`CreationDate`"
             sql += ") VALUES ("
-            #sql += " '" + rfile.filename + "'"
-            #sql += "," + str(rfile.st_size)
-            #sql += ",'" + str(datetime.datetime.fromtimestamp(rfile.st_mtime)) + "'"
-            sql += "%s , %s , %s"
+            sql += placeholders
             sql += ");"
 
-            cursor3 = con3.cursor()
-            cursor3.execute(sql,(rfile.filename , rfile.st_size , datetime.datetime.fromtimestamp(rfile.st_mtime)))
-            con3.commit()
-            cursor3.close()
-            
-            #print(rfile.filename + ":" + str(datetime.datetime.fromtimestamp(rfile.st_atime)))
-            #print (sql)
+            non_select_state(sql,params)
+ 
     sftp_connection.close()
-    con3.close()
 
-    #重複ファイルを一覧から削除
-    con4 = dbconnect()
-    cursor4 = con4.cursor()
+    #取得済みファイル一覧から、2日以内の日付を取得。一時取得テーブルに同名・同日付のファイルがあれば、削除する
 
-    #取得するホストの情報をデータベースから取得
+    two_days_ago = datetime.datetime.now() - datetime.timedelta(days=2)
+    params = [two_days_ago]
+    
     sql = "SELECT"
     sql += " `FileName`"
     sql += ",`FileSize`"
@@ -122,14 +121,12 @@ def main():
     sql += "WHERE"
     sql += " `CreationDate`;"
     sql += " > %s"
-    two_days_ago = datetime.datetime.now() - datetime.timedelta(days=2)
-    cursor4.execute(sql, (two_days_ago,)) 
-    result=cursor4.fetchall()
-
-    con5 = dbconnect()
+    
+    result = select_state(sql,params)
 
     for item in result:
         FILENAME , FILESIZE , CREADATE = item
+        params = [FILENAME , FILESIZE , CREADATE]
 
         sql = "DELETE"
         sql += " FROM"
@@ -142,12 +139,7 @@ def main():
         sql += " `CreationDate` = %s"
         sql += ";"
 
-        cursor5 = con5.cursor()
-        cursor5.execute(sql,(FILENAME , FILESIZE, CREADATE,))
-        con5.commit()
-        cursor5.close()
-
-    cursor4.close()
+        non_select_state(sql,params)
 
     #ファイルを取得するため、一覧を取得
     sql = "SELECT"
@@ -157,21 +149,16 @@ def main():
     sql += " FROM"
     sql += " `templist`;"
 
-    con6 = dbconnect()
-    cursor6 = con6.cursor()
-    cursor6.execute(sql)
-
-    result=cursor6.fetchall()
-
-    con7 = dbconnect()
-
+    params=[]
+    result = select_state(sql,params)
+    
     for item in result:
-        FILENAME = item[0]
-        FILESIZE = item[1]
-        CREADATE = item[2]
+
+        FILENAME , FILESIZE , CREADATE = item
+        params = [FILENAME , FILESIZE , CREADATE]
+        placeholders = ', '.join(['%s'] * len(params))
 
         sftp_connection = client.open_sftp()
-        #sftp_connection.chdir(BKDIR)
 
         sftp_connection.get(BKDIR + FILENAME, WRDIR + FILENAME)
         sftp_connection.close()
@@ -185,15 +172,10 @@ def main():
         sql += ",`FileSize`"
         sql += ",`CreationDate`"
         sql += ") VALUES ("
-        sql += " '" + FILENAME + "'"
-        sql += "," + str(FILESIZE)
-        sql += ",'" + str(CREADATE) + "'"
+        sql += placeholders
         sql += ");"
 
-        cursor7 = con7.cursor()
-        cursor7.execute(sql)
-        con7.commit()
-        cursor7.close()
+        non_select_state(sql,params)
 
     client.close()
 
